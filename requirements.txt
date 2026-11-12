@@ -1,0 +1,13 @@
+@(
+"fastapi"
+"uvicorn[standard]"
+"sqlalchemy"
+"psycopg2-binary"
+"python-multipart"
+"python-dotenv"
+"scikit-learn"
+"numpy"
+"Pillow"
+"joblib"
+"pandas"
+) | Set-Content requirements.txt

@@ -1,27 +1,25 @@
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 
 const API = "http://127.0.0.1:8000";
 
 function App() {
-  // Ride booking states
   const [pickup, setPickup] = useState("");
   const [destination, setDestination] = useState("");
   const [ride, setRide] = useState(null);
   const [rides, setRides] = useState([]);
+  const [driverId, setDriverId] = useState(null);
+
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-
-  // GPS states
-  const [gpsMessage, setGpsMessage] = useState("");
-  const [gpsLocation, setGpsLocation] = useState(null);
-
-  // Driver safety states
-  const [safetyImage, setSafetyImage] = useState(null);
-  const [safetyResult, setSafetyResult] = useState(null);
+  const [gpsLoading, setGpsLoading] = useState(false);
   const [safetyLoading, setSafetyLoading] = useState(false);
 
-  // Load all rides
+  const [message, setMessage] = useState("");
+  const [gpsMessage, setGpsMessage] = useState("");
+  const [safetyResult, setSafetyResult] = useState(null);
+  const [safetyImage, setSafetyImage] = useState(null);
+
+  // Load previous rides
   const loadRides = async () => {
     try {
       const response = await fetch(`${API}/rides`);
@@ -33,7 +31,7 @@ function App() {
       const data = await response.json();
       setRides(Array.isArray(data) ? data : []);
     } catch (error) {
-      console.error("Load rides error:", error);
+      console.error("Ride loading error:", error);
     }
   };
 
@@ -41,8 +39,10 @@ function App() {
     loadRides();
   }, []);
 
-  // Request a ride
-  const requestRide = async () => {
+  // Book a ride
+  const requestRide = async (e) => {
+    e.preventDefault();
+
     if (!pickup.trim() || !destination.trim()) {
       setMessage("Please enter pickup and destination.");
       return;
@@ -62,20 +62,21 @@ function App() {
 
       const matchData = await matchResponse.json();
 
-      const driverId =
+      const matchedDriverId =
         matchData.driver_id ??
         matchData.id ??
         matchData.driver?.id;
 
-      if (!driverId) {
-        throw new Error("No driver ID returned by the matching API.");
+      if (!matchedDriverId) {
+        throw new Error("No available driver found.");
       }
 
-      // Demo coordinates: replace with actual geocoded coordinates
-      // when pickup and destination geocoding is implemented.
+      setDriverId(matchedDriverId);
+
+      // Demo coordinates for the selected locations
       const params = new URLSearchParams({
         passenger_id: "1",
-        driver_id: String(driverId),
+        driver_id: String(matchedDriverId),
         pickup_latitude: "17.3850",
         pickup_longitude: "78.4867",
         destination_latitude: "17.4000",
@@ -83,297 +84,323 @@ function App() {
         status: "requested",
         fare: "250",
         distance: "45",
-        estimated_time: "90"
+        estimated_time: "90",
       });
 
-      const rideResponse = await fetch(
+      const bookingResponse = await fetch(
         `${API}/rides?${params.toString()}`,
         {
-          method: "POST"
+          method: "POST",
         }
       );
 
-      if (!rideResponse.ok) {
-        const errorData = await rideResponse.json();
+      if (!bookingResponse.ok) {
+        const errorData = await bookingResponse.json();
         throw new Error(
           errorData.detail || "Ride booking failed."
         );
       }
 
-      const rideData = await rideResponse.json();
+      const bookingData = await bookingResponse.json();
 
-      setRide({
-        ...rideData,
-        driver_id: rideData.driver_id ?? driverId,
-        pickup,
-        destination
-      });
-
+      setRide(bookingData);
       setMessage("Ride booked successfully!");
-      await loadRides();
 
+      await loadRides();
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error.message || "Unable to book ride.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Get current browser location and update driver location
+  // Get current GPS location and update driver location
   const startGPSTracking = () => {
-    if (!ride?.driver_id) {
-      setGpsMessage("Book a ride with a matched driver first.");
-      return;
-    }
-
     if (!navigator.geolocation) {
-      setGpsMessage("Geolocation is not supported by this browser.");
+      setGpsMessage("GPS is not supported by this browser.");
       return;
     }
 
-    setGpsMessage("Getting your location...");
+    const selectedDriverId = ride?.driver_id ?? driverId;
+
+    if (!selectedDriverId) {
+      setGpsMessage("Please book a ride and find a driver first.");
+      return;
+    }
+
+    setGpsLoading(true);
+    setGpsMessage("Getting your current location...");
 
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const latitude = position.coords.latitude;
         const longitude = position.coords.longitude;
 
-        setGpsLocation({ latitude, longitude });
-
         try {
           const params = new URLSearchParams({
             latitude: String(latitude),
-            longitude: String(longitude)
+            longitude: String(longitude),
           });
 
           const response = await fetch(
-            `${API}/drivers/${ride.driver_id}/location?${params}`,
-            { method: "POST" }
+            `${API}/drivers/${selectedDriverId}/location?${params}`,
+            {
+              method: "POST",
+            }
           );
 
-          const data = await response.json();
-
           if (!response.ok) {
-            throw new Error(data.detail || "GPS update failed.");
+            const errorData = await response.json();
+            throw new Error(
+              errorData.detail || "Location update failed."
+            );
           }
 
-          setGpsMessage("Location updated successfully!");
+          setGpsMessage(
+            `GPS updated successfully! Latitude: ${latitude.toFixed(
+              5
+            )}, Longitude: ${longitude.toFixed(5)}`
+          );
         } catch (error) {
           setGpsMessage(error.message);
+        } finally {
+          setGpsLoading(false);
         }
       },
       (error) => {
-        setGpsMessage("GPS error: " + error.message);
+        let errorMessage = "Unable to get GPS location.";
+
+        if (error.code === 1) {
+          errorMessage =
+            "Location permission denied. Allow location access in browser settings.";
+        } else if (error.code === 2) {
+          errorMessage =
+            "Current location is unavailable. Check your device location settings.";
+        } else if (error.code === 3) {
+          errorMessage =
+            "GPS timeout. Try again or use a device with location enabled.";
+        }
+
+        setGpsMessage(errorMessage);
+        setGpsLoading(false);
       },
       {
-        enableHighAccuracy: true,
-        timeout: 10000
+        enableHighAccuracy: false,
+        timeout: 30000,
+        maximumAge: 60000,
       }
     );
   };
 
-  // AI driver safety detection
-  const detectDriverSafety = async () => {
+  // Driver safety image detection
+  const detectDriverSafety = async (e) => {
+    e.preventDefault();
+
     if (!safetyImage) {
-      alert("Please select a driver image first.");
+      setSafetyResult({
+        error: "Please select a driver image first.",
+      });
       return;
     }
 
-    const formData = new FormData();
-    formData.append("file", safetyImage);
+    setSafetyLoading(true);
+    setSafetyResult(null);
 
     try {
-      setSafetyLoading(true);
-      setSafetyResult(null);
+      const formData = new FormData();
+      formData.append("file", safetyImage);
 
       const response = await fetch(
         `${API}/detect-driver-safety`,
         {
           method: "POST",
-          body: formData
+          body: formData,
         }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.detail || "Safety detection failed.");
+        throw new Error(
+          data.detail || "Driver safety detection failed."
+        );
       }
 
       setSafetyResult(data);
-
     } catch (error) {
-      alert(error.message);
+      setSafetyResult({
+        error: error.message,
+      });
     } finally {
       setSafetyLoading(false);
     }
   };
 
   return (
-    <div style={styles.container}>
+    <div style={styles.page}>
       <header style={styles.header}>
         <h1>AI-Powered Secure Dynamic Ride-Sharing</h1>
-        <p>Smart Matching | Route Optimization | Driver Safety</p>
+        <p>Smart Matching | GPS Tracking | Driver Safety</p>
       </header>
 
-      {/* Ride Booking */}
-      <section style={styles.card}>
-        <h2>Book Your Ride</h2>
+      <main style={styles.container}>
+        {/* Ride Booking */}
+        <section style={styles.card}>
+          <h2>Book Your Ride</h2>
 
-        <label>Pickup Location</label>
-        <input
-          style={styles.input}
-          type="text"
-          placeholder="Enter pickup location"
-          value={pickup}
-          onChange={(e) => setPickup(e.target.value)}
-        />
+          <form onSubmit={requestRide}>
+            <label style={styles.label}>Pickup Location</label>
 
-        <label>Destination</label>
-        <input
-          style={styles.input}
-          type="text"
-          placeholder="Enter destination"
-          value={destination}
-          onChange={(e) => setDestination(e.target.value)}
-        />
+            <input
+              style={styles.input}
+              type="text"
+              placeholder="Enter pickup location"
+              value={pickup}
+              onChange={(e) => setPickup(e.target.value)}
+            />
 
-        <button
-          style={styles.button}
-          onClick={requestRide}
-          disabled={loading}
-        >
-          {loading ? "Finding Driver..." : "Request Ride"}
-        </button>
+            <label style={styles.label}>
+              Destination
+            </label>
 
-        {message && <p>{message}</p>}
+            <input
+              style={styles.input}
+              type="text"
+              placeholder="Enter destination"
+              value={destination}
+              onChange={(e) => setDestination(e.target.value)}
+            />
 
-        {ride && (
-          <div style={styles.result}>
-            <h3>Ride Details</h3>
-            <p>Ride ID: {ride.id ?? "Created"}</p>
-            <p>Driver ID: {ride.driver_id}</p>
-            <p>Pickup: {ride.pickup}</p>
-            <p>Destination: {ride.destination}</p>
-            <p>Status: {ride.status ?? "Requested"}</p>
-          </div>
-        )}
-      </section>
-
-      {/* GPS Tracking */}
-      <section style={styles.card}>
-        <h2>GPS Location Update</h2>
-
-        <p>Update the browser device's current location.</p>
-
-        <button
-          style={styles.button}
-          onClick={startGPSTracking}
-        >
-          Get Current GPS Location
-        </button>
-
-        {gpsMessage && <p>{gpsMessage}</p>}
-
-        {gpsLocation && (
-          <div style={styles.result}>
-            <p>Latitude: {gpsLocation.latitude}</p>
-            <p>Longitude: {gpsLocation.longitude}</p>
-
-            <a
-              href={`https://www.google.com/maps?q=${gpsLocation.latitude},${gpsLocation.longitude}`}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              style={styles.button}
+              type="submit"
+              disabled={loading}
             >
-              View Location on Google Maps
-            </a>
-          </div>
-        )}
-      </section>
+              {loading ? "Booking..." : "Request Ride"}
+            </button>
+          </form>
 
-      {/* AI Driver Safety Detection */}
-      <section style={styles.card}>
-        <h2>AI Driver Safety Detection</h2>
+          {message && (
+            <p style={styles.message}>{message}</p>
+          )}
 
-        <p>
-          Upload a driver image to classify possible
-          distracted-driving behaviour.
-        </p>
-
-        <input
-          style={styles.input}
-          type="file"
-          accept="image/jpeg,image/png"
-          onChange={(e) => {
-            setSafetyImage(e.target.files?.[0] || null);
-            setSafetyResult(null);
-          }}
-        />
-
-        {safetyImage && (
-          <p>Selected image: {safetyImage.name}</p>
-        )}
-
-        <button
-          style={styles.button}
-          onClick={detectDriverSafety}
-          disabled={safetyLoading || !safetyImage}
-        >
-          {safetyLoading ? "Analyzing Image..." : "Detect Driver Safety"}
-        </button>
-
-        {safetyResult && (
-          <div style={styles.result}>
-            <h3>Safety Detection Result</h3>
-
-            <p>
-              <strong>Behaviour:</strong>{" "}
-              {safetyResult.behaviour}
-            </p>
-
-            <p>
-              <strong>Confidence:</strong>{" "}
-              {safetyResult.confidence}%
-            </p>
-
-            <p>
-              <strong>Status:</strong>{" "}
-              {safetyResult.status}
-            </p>
-          </div>
-        )}
-
-        <p style={styles.note}>
-          This is an image-based prediction and does not
-          provide continuous driver monitoring.
-        </p>
-      </section>
-
-      {/* All Booked Rides */}
-      <section style={styles.card}>
-        <h2>All Booked Rides</h2>
-
-        <button
-          style={styles.secondaryButton}
-          onClick={loadRides}
-        >
-          Refresh Rides
-        </button>
-
-        {rides.length === 0 ? (
-          <p>No rides available.</p>
-        ) : (
-          rides.map((item, index) => (
-            <div key={item.id ?? index} style={styles.result}>
-              <p>Ride ID: {item.id}</p>
-              <p>Passenger ID: {item.passenger_id}</p>
-              <p>Driver ID: {item.driver_id}</p>
-              <p>Status: {item.status}</p>
-              <p>Fare: {item.fare}</p>
+          {ride && (
+            <div style={styles.result}>
+              <h3>Ride Details</h3>
+              <p>Ride ID: {ride.id}</p>
+              <p>Driver ID: {ride.driver_id}</p>
+              <p>Status: {ride.status}</p>
+              <p>Fare: ₹{ride.fare ?? 250}</p>
             </div>
-          ))
-        )}
-      </section>
+          )}
+        </section>
+
+        {/* GPS Tracking */}
+        <section style={styles.card}>
+          <h2>GPS Location Tracking</h2>
+
+          <p>
+            Get the current browser device location and update
+            the matched driver's saved location.
+          </p>
+
+          <button
+            style={styles.button}
+            onClick={startGPSTracking}
+            disabled={gpsLoading}
+          >
+            {gpsLoading ? "Getting Location..." : "Update GPS Location"}
+          </button>
+
+          {gpsMessage && (
+            <p style={styles.message}>{gpsMessage}</p>
+          )}
+        </section>
+
+        {/* Driver Safety Detection */}
+        <section style={styles.card}>
+          <h2>AI Driver Safety Detection</h2>
+
+          <p>
+            Upload a driver image to classify the driving
+            behaviour using the trained model.
+          </p>
+
+          <form onSubmit={detectDriverSafety}>
+            <input
+              style={styles.input}
+              type="file"
+              accept="image/*"
+              onChange={(e) =>
+                setSafetyImage(e.target.files[0] || null)
+              }
+            />
+
+            <button
+              style={styles.button}
+              type="submit"
+              disabled={safetyLoading}
+            >
+              {safetyLoading
+                ? "Analyzing..."
+                : "Detect Driver Behaviour"}
+            </button>
+          </form>
+
+          {safetyResult && (
+            <div style={styles.result}>
+              <h3>Safety Detection Result</h3>
+
+              {safetyResult.error ? (
+                <p>{safetyResult.error}</p>
+              ) : (
+                <>
+                  <p>
+                    Behaviour: {safetyResult.behaviour}
+                  </p>
+                  <p>
+                    Confidence:{" "}
+                    {safetyResult.confidence != null
+                      ? `${(
+                          Number(safetyResult.confidence) <= 1
+                            ? Number(safetyResult.confidence) * 100
+                            : Number(safetyResult.confidence)
+                        ).toFixed(2)}%`
+                      : "Not provided"}
+                  </p>
+                  <p>Status: {safetyResult.status}</p>
+                </>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* Ride History */}
+        <section style={styles.card}>
+          <h2>Ride History</h2>
+
+          <button
+            style={styles.secondaryButton}
+            onClick={loadRides}
+          >
+            Refresh Rides
+          </button>
+
+          {rides.length === 0 ? (
+            <p>No rides available.</p>
+          ) : (
+            rides.map((item) => (
+              <div key={item.id} style={styles.rideItem}>
+                <p>Ride ID: {item.id}</p>
+                <p>Passenger ID: {item.passenger_id}</p>
+                <p>Driver ID: {item.driver_id}</p>
+                <p>Status: {item.status}</p>
+                <p>Fare: ₹{item.fare}</p>
+              </div>
+            ))
+          )}
+        </section>
+      </main>
 
       <footer style={styles.footer}>
         <p>AI-Powered Secure Dynamic Ride-Sharing Project</p>
@@ -383,81 +410,96 @@ function App() {
 }
 
 const styles = {
-  container: {
-    maxWidth: "900px",
-    margin: "0 auto",
-    padding: "20px",
+  page: {
+    minHeight: "100vh",
+    background: "#f1f5f9",
     fontFamily: "Arial, sans-serif",
-    color: "#222"
+    color: "#1e293b",
   },
 
   header: {
-    textAlign: "center",
-    background: "#17365d",
+    background: "#123456",
     color: "white",
-    padding: "25px",
-    borderRadius: "10px",
-    marginBottom: "20px"
+    padding: "25px 15px",
+    textAlign: "center",
+  },
+
+  container: {
+    maxWidth: "850px",
+    margin: "25px auto",
+    padding: "0 15px",
   },
 
   card: {
-    background: "#ffffff",
-    padding: "22px",
-    marginBottom: "20px",
-    borderRadius: "10px",
-    boxShadow: "0 2px 10px rgba(0,0,0,0.10)"
+    background: "white",
+    padding: "25px",
+    marginBottom: "22px",
+    borderRadius: "12px",
+    boxShadow: "0 2px 10px rgba(0,0,0,0.08)",
+  },
+
+  label: {
+    display: "block",
+    marginTop: "15px",
+    marginBottom: "7px",
+    fontWeight: "bold",
   },
 
   input: {
-    display: "block",
     width: "100%",
-    boxSizing: "border-box",
     padding: "12px",
-    margin: "10px 0 18px",
-    border: "1px solid #ccc",
+    marginBottom: "12px",
+    border: "1px solid #cbd5e1",
     borderRadius: "6px",
-    fontSize: "15px"
+    boxSizing: "border-box",
   },
 
   button: {
-    background: "#1769aa",
+    width: "100%",
+    padding: "13px",
+    marginTop: "12px",
+    background: "#2563eb",
     color: "white",
     border: "none",
-    padding: "12px 20px",
     borderRadius: "6px",
     cursor: "pointer",
-    marginTop: "8px",
-    fontSize: "15px"
+    fontWeight: "bold",
   },
 
   secondaryButton: {
-    background: "#555",
+    padding: "10px 18px",
+    background: "#475569",
     color: "white",
     border: "none",
-    padding: "10px 16px",
     borderRadius: "6px",
-    cursor: "pointer"
+    cursor: "pointer",
+  },
+
+  message: {
+    marginTop: "15px",
+    color: "#1d4ed8",
+    overflowWrap: "anywhere",
   },
 
   result: {
-    background: "#f0f5fa",
-    padding: "14px",
-    marginTop: "15px",
-    borderRadius: "7px",
-    overflowWrap: "anywhere"
+    background: "#eff6ff",
+    padding: "15px",
+    marginTop: "18px",
+    borderRadius: "8px",
+    overflowWrap: "anywhere",
   },
 
-  note: {
-    fontSize: "13px",
-    color: "#666",
-    marginTop: "15px"
+  rideItem: {
+    borderBottom: "1px solid #e2e8f0",
+    padding: "12px 0",
   },
 
   footer: {
     textAlign: "center",
-    padding: "15px",
-    color: "#666"
-  }
+    padding: "18px",
+    background: "#123456",
+    color: "white",
+  },
 };
 
 export default App;
