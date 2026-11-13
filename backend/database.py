@@ -3,18 +3,7 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL environment variable is not configured")
-
-# Normalize Render PostgreSQL URLs for SQLAlchemy
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace(
-        "postgres://", "postgresql://", 1
-    )
+DATABASE_URL = "postgresql://postgres:sdlmumeshooha_2303@localhost:5432/AI-Ride-Sharing"
 
 engine = create_engine(DATABASE_URL)
 
@@ -25,7 +14,6 @@ SessionLocal = sessionmaker(
 )
 
 Base = declarative_base()
-
 
 def get_db():
     db = SessionLocal()
